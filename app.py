@@ -380,25 +380,23 @@ def render_sidebar() -> None:
 
         if not sources:
             st.sidebar.warning("Add at least one FAQ file or enable the sample FAQ.")
-            return
+        else:
+            fingerprint = corpus_fingerprint(sources)
+            if fingerprint == st.session_state.corpus_hash and st.session_state.index_ready:
+                st.sidebar.success("Index is already up to date.")
+            else:
+                progress = st.sidebar.progress(0, text="Preparing documents...")
+                chunks, vectorizer, matrix = index_sources(sources, max_chars=max_chars, progress=progress)
+                progress.progress(100, text="Index ready")
 
-        fingerprint = corpus_fingerprint(sources)
-        if fingerprint == st.session_state.corpus_hash and st.session_state.index_ready:
-            st.sidebar.success("Index is already up to date.")
-            return
-
-        progress = st.sidebar.progress(0, text="Preparing documents...")
-        chunks, vectorizer, matrix = index_sources(sources, max_chars=max_chars, progress=progress)
-        progress.progress(100, text="Index ready")
-
-        st.session_state.docs = sources
-        st.session_state.chunks = chunks
-        st.session_state.vectorizer = vectorizer
-        st.session_state.matrix = matrix
-        st.session_state.corpus_hash = fingerprint
-        st.session_state.index_ready = True
-        st.session_state.last_sources = []
-        st.sidebar.success(f"Indexed {len(sources)} documents and {len(chunks)} chunks.")
+                st.session_state.docs = sources
+                st.session_state.chunks = chunks
+                st.session_state.vectorizer = vectorizer
+                st.session_state.matrix = matrix
+                st.session_state.corpus_hash = fingerprint
+                st.session_state.index_ready = True
+                st.session_state.last_sources = []
+                st.sidebar.success(f"Indexed {len(sources)} documents and {len(chunks)} chunks.")
 
     st.sidebar.divider()
     st.sidebar.markdown("### Conversation history")
