@@ -137,6 +137,8 @@ class Chunk:
     doc_name: str
     text: str
     chunk_id: int
+    question: str = ""
+    answer: str = ""
 
 
 def normalize_text(text: str) -> str:
@@ -185,6 +187,38 @@ def split_into_chunks(text: str, max_chars: int = 800, overlap: int = 120) -> li
     return [c for c in refined if c.strip()]
 
 
+def parse_faq_pairs(text: str) -> list[tuple[str, str]]:
+    cleaned = normalize_text(text)
+    if not cleaned:
+        return []
+
+    matches = list(re.finditer(r"(?:^|\s)(\d+)\.\s+", text, flags=re.M))
+    if len(matches) < 2:
+        return []
+
+    pairs: list[tuple[str, str]] = []
+    for idx, match in enumerate(matches):
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        block = text[start:end].strip()
+        lines = [line.strip() for line in block.splitlines() if line.strip()]
+        if not lines:
+            continue
+
+        question = lines[0].rstrip(" ?")
+        answer = " ".join(lines[1:]).strip()
+
+        if not answer and "?" in question:
+            q_end = question.find("?")
+            answer = question[q_end + 1 :].strip()
+            question = question[: q_end + 1].strip()
+
+        if question and answer:
+            pairs.append((question, answer))
+
+    return pairs
+
+
 def read_pdf_bytes(file_bytes: bytes) -> str:
     reader = PdfReader(io.BytesIO(file_bytes))
     pages = []
@@ -218,6 +252,21 @@ def make_chunks_from_sources(sources: list[tuple[str, str]], max_chars: int) -> 
     for doc_name, text in sources:
         if doc_name.lower().endswith(".csv"):
             text = parse_csv_text(text)
+        pairs = parse_faq_pairs(text)
+        if pairs:
+            for idx, (question, answer) in enumerate(pairs):
+                combined = f"Question: {question}\nAnswer: {answer}"
+                chunks.append(
+                    Chunk(
+                        doc_name=doc_name,
+                        text=combined,
+                        chunk_id=idx,
+                        question=question,
+                        answer=answer,
+                    )
+                )
+            continue
+
         for idx, chunk_text in enumerate(split_into_chunks(text, max_chars=max_chars)):
             chunks.append(Chunk(doc_name=doc_name, text=chunk_text, chunk_id=idx))
     return chunks
@@ -300,7 +349,14 @@ def build_answer(query: str, retrieved: list[tuple[float, Chunk]]) -> str:
             "Try rephrasing the question or upload a more relevant document."
         )
 
-    top_texts = [chunk.text for _, chunk in retrieved[:3]]
+    best_score, best_chunk = retrieved[0]
+
+    if best_chunk.answer:
+        return (
+            f"{best_chunk.answer}\n\n"
+            f"Source: {best_chunk.doc_name} | Match confidence: {best_score:.3f}"
+        )
+
     keywords = extract_keywords(query)
     lead = "Here is the most relevant information I found:"
     if keywords:
@@ -309,8 +365,8 @@ def build_answer(query: str, retrieved: list[tuple[float, Chunk]]) -> str:
     bullets = []
     for score, chunk in retrieved[:3]:
         snippet = chunk.text
-        if len(snippet) > 220:
-            snippet = snippet[:217].rstrip() + "..."
+        if len(snippet) > 180:
+            snippet = snippet[:177].rstrip() + "..."
         bullets.append(f"- {snippet} [{chunk.doc_name}]")
 
     return f"{lead}\n" + "\n".join(bullets) + "\n\nIf you want, I can keep searching across the uploaded FAQ set."
