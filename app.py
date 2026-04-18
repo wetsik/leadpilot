@@ -382,7 +382,7 @@ def build_answer(query: str, retrieved: list[tuple[float, Chunk]]) -> str:
 
     best_score, best_chunk = retrieved[0]
 
-    if best_score < 0.25:
+    if best_score < 0.55:
         return (
             "I found a weak match, but I am not confident enough to answer safely. "
             "Try asking with words closer to the FAQ wording or add a more specific FAQ entry."
