@@ -120,8 +120,10 @@ def init_state() -> None:
         "index_ready": False,
         "docs": [],
         "chunks": [],
-        "vectorizer": None,
-        "matrix": None,
+        "word_vectorizer": None,
+        "word_matrix": None,
+        "char_vectorizer": None,
+        "char_matrix": None,
         "corpus_hash": None,
         "messages": [],
         "conversations": [],
@@ -283,12 +285,22 @@ def corpus_fingerprint(sources: Iterable[tuple[str, str]]) -> str:
 
 
 def build_index(chunks: list[Chunk]):
-    texts = [chunk.text for chunk in chunks]
+    texts = [chunk.question or chunk.text for chunk in chunks]
     if not texts:
-        return None, None
-    vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1, 2), max_features=5000)
-    matrix = vectorizer.fit_transform(texts)
-    return vectorizer, matrix
+        return None, None, None, None
+    word_vectorizer = TfidfVectorizer(
+        stop_words="english",
+        ngram_range=(1, 2),
+        max_features=5000,
+    )
+    char_vectorizer = TfidfVectorizer(
+        analyzer="char_wb",
+        ngram_range=(3, 5),
+        max_features=7000,
+    )
+    word_matrix = word_vectorizer.fit_transform(texts)
+    char_matrix = char_vectorizer.fit_transform(texts)
+    return word_vectorizer, word_matrix, char_vectorizer, char_matrix
 
 
 def extract_keywords(query: str, limit: int = 5) -> list[str]:
@@ -326,16 +338,35 @@ def extract_keywords(query: str, limit: int = 5) -> list[str]:
     return [word for word, _ in Counter(words).most_common(limit)]
 
 
-def rank_chunks(query: str, vectorizer, matrix, chunks: list[Chunk], top_k: int = 4):
-    if vectorizer is None or matrix is None or not chunks:
+def rank_chunks(
+    query: str,
+    word_vectorizer,
+    word_matrix,
+    char_vectorizer,
+    char_matrix,
+    chunks: list[Chunk],
+    top_k: int = 4,
+):
+    if (
+        not chunks
+        or word_vectorizer is None
+        or word_matrix is None
+        or char_vectorizer is None
+        or char_matrix is None
+    ):
         return []
-    q_vec = vectorizer.transform([query])
-    scores = (matrix @ q_vec.T).toarray().ravel()
+
+    q_word = word_vectorizer.transform([query])
+    q_char = char_vectorizer.transform([query])
+    word_scores = (word_matrix @ q_word.T).toarray().ravel()
+    char_scores = (char_matrix @ q_char.T).toarray().ravel()
+    scores = (0.35 * word_scores) + (0.65 * char_scores)
+
     order = np.argsort(scores)[::-1]
     results = []
     for idx in order[:top_k]:
         score = float(scores[idx])
-        if score <= 0:
+        if score <= 0.08:
             continue
         chunk = chunks[idx]
         results.append((score, chunk))
@@ -345,11 +376,17 @@ def rank_chunks(query: str, vectorizer, matrix, chunks: list[Chunk], top_k: int 
 def build_answer(query: str, retrieved: list[tuple[float, Chunk]]) -> str:
     if not retrieved:
         return (
-            "I could not find a direct answer in the uploaded FAQ files. "
+            "I could not find a confident answer in the uploaded FAQ files. "
             "Try rephrasing the question or upload a more relevant document."
         )
 
     best_score, best_chunk = retrieved[0]
+
+    if best_score < 0.25:
+        return (
+            "I found a weak match, but I am not confident enough to answer safely. "
+            "Try asking with words closer to the FAQ wording or add a more specific FAQ entry."
+        )
 
     if best_chunk.answer:
         return (
@@ -390,10 +427,10 @@ def index_sources(sources: list[tuple[str, str]], max_chars: int, progress=None)
     chunks = make_chunks_from_sources(sources, max_chars=max_chars)
     if progress is not None:
         progress.progress(30, text="Chunking FAQ content...")
-    vectorizer, matrix = build_index(chunks)
+    word_vectorizer, word_matrix, char_vectorizer, char_matrix = build_index(chunks)
     if progress is not None:
         progress.progress(85, text="Building semantic index...")
-    return chunks, vectorizer, matrix
+    return chunks, word_vectorizer, word_matrix, char_vectorizer, char_matrix
 
 
 def start_new_chat() -> None:
@@ -442,13 +479,17 @@ def render_sidebar() -> None:
                 st.sidebar.success("Index is already up to date.")
             else:
                 progress = st.sidebar.progress(0, text="Preparing documents...")
-                chunks, vectorizer, matrix = index_sources(sources, max_chars=max_chars, progress=progress)
+                chunks, word_vectorizer, word_matrix, char_vectorizer, char_matrix = index_sources(
+                    sources, max_chars=max_chars, progress=progress
+                )
                 progress.progress(100, text="Index ready")
 
                 st.session_state.docs = sources
                 st.session_state.chunks = chunks
-                st.session_state.vectorizer = vectorizer
-                st.session_state.matrix = matrix
+                st.session_state.word_vectorizer = word_vectorizer
+                st.session_state.word_matrix = word_matrix
+                st.session_state.char_vectorizer = char_vectorizer
+                st.session_state.char_matrix = char_matrix
                 st.session_state.corpus_hash = fingerprint
                 st.session_state.index_ready = True
                 st.session_state.last_sources = []
@@ -517,7 +558,13 @@ def main() -> None:
     user_query = st.chat_input("Ask a question about the FAQ...")
 
     if user_query:
-        if not st.session_state.index_ready or st.session_state.vectorizer is None or st.session_state.matrix is None:
+        if (
+            not st.session_state.index_ready
+            or st.session_state.word_vectorizer is None
+            or st.session_state.word_matrix is None
+            or st.session_state.char_vectorizer is None
+            or st.session_state.char_matrix is None
+        ):
             st.warning("Please build the FAQ index first.")
             st.stop()
 
@@ -527,8 +574,10 @@ def main() -> None:
 
         retrieved = rank_chunks(
             user_query,
-            st.session_state.vectorizer,
-            st.session_state.matrix,
+            st.session_state.word_vectorizer,
+            st.session_state.word_matrix,
+            st.session_state.char_vectorizer,
+            st.session_state.char_matrix,
             st.session_state.chunks,
             top_k=top_k,
         )
