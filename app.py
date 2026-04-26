@@ -427,6 +427,70 @@ def is_trello_configured() -> bool:
     )
 
 
+def analyze_client_problem(problem_text: str) -> dict[str, str]:
+    text = " ".join(problem_text.strip().split())
+    lowered = text.lower()
+
+    category_keywords = {
+        "CSV / Data Import": ["csv", "upload", "file", "column", "data", "import", "excel"],
+        "CRM / Leads": ["lead", "crm", "manager", "pipeline", "deal", "bitrix"],
+        "Dashboard / UI": ["dashboard", "chart", "table", "button", "filter", "screen", "page"],
+        "API / Integration": ["api", "trello", "jira", "integration", "token", "connect"],
+        "Performance": ["slow", "loading", "timeout", "delay", "lag"],
+    }
+
+    category = "General Support"
+    for candidate, keywords in category_keywords.items():
+        if any(keyword in lowered for keyword in keywords):
+            category = candidate
+            break
+
+    if any(keyword in lowered for keyword in ["urgent", "critical", "crash", "broken", "error", "fail", "can't", "cannot"]):
+        priority = "High"
+    elif any(keyword in lowered for keyword in ["slow", "wrong", "issue", "problem", "missing"]):
+        priority = "Medium"
+    else:
+        priority = "Low"
+
+    first_sentence = text.split(".")[0].split("!")[0].split("?")[0].strip()
+    if len(first_sentence) > 80:
+        first_sentence = first_sentence[:77].rstrip() + "..."
+    title = f"{category}: {first_sentence}" if first_sentence else f"{category}: Client problem"
+
+    description = "\n".join(
+        [
+            "Client submitted a problem through the Streamlit bot.",
+            "",
+            f"Detected category: {category}",
+            f"Detected priority: {priority}",
+            "",
+            "Original client message:",
+            text,
+            "",
+            "Suggested next step:",
+            build_problem_next_step(category, priority),
+        ]
+    )
+
+    return {"title": title, "description": description, "priority": priority, "category": category}
+
+
+def build_problem_next_step(category: str, priority: str) -> str:
+    if category == "CSV / Data Import":
+        return "Check the uploaded CSV structure, required columns, and numeric field formatting."
+    if category == "CRM / Leads":
+        return "Review lead data, pipeline stage mapping, and CRM owner fields."
+    if category == "Dashboard / UI":
+        return "Reproduce the issue in the dashboard and inspect the affected UI component."
+    if category == "API / Integration":
+        return "Verify API credentials, list IDs, tokens, and request/response errors."
+    if category == "Performance":
+        return "Check loading time, dataset size, and any timeout or slow processing step."
+    if priority == "High":
+        return "Investigate immediately and contact the client with a status update."
+    return "Review the request and assign it to the responsible support owner."
+
+
 def load_leads_from_upload(uploaded_file) -> pd.DataFrame:
     decoded = uploaded_file.getvalue().decode("utf-8", errors="ignore")
     rows = list(csv.DictReader(io.StringIO(decoded)))
@@ -970,7 +1034,7 @@ def render_data_quality_board() -> None:
 
 def render_problem_reporter() -> None:
     st.markdown("### Client Problem Reporter")
-    st.caption("Submitted client problems are sent to the configured Trello To Do list.")
+    st.caption("The client writes a problem in plain text. The bot analyzes it and creates a Trello To Do card.")
 
     api_status = "Connected" if is_trello_configured() else "Not configured"
     c1, c2, c3 = st.columns(3)
@@ -979,32 +1043,35 @@ def render_problem_reporter() -> None:
     c3.metric("API Status", api_status)
 
     with st.form("problem_report_form", clear_on_submit=True):
-        title = st.text_input("Problem title", placeholder="Example: CSV upload fails for client file")
-        description = st.text_area(
-            "Problem description",
-            placeholder="Describe what happened, expected result, and any useful client details.",
-            height=120,
+        problem_text = st.text_area(
+            "Describe the problem",
+            placeholder="Example: I uploaded a CSV file, but the dashboard shows 0 leads and no table data.",
+            height=140,
         )
-        priority = st.selectbox("Priority", ["Medium", "High", "Low"])
-        submitted = st.form_submit_button("Send to To Do list", use_container_width=True)
+        submitted = st.form_submit_button("Ask bot to create To Do card", use_container_width=True)
 
     if submitted:
-        clean_title = title.strip()
-        clean_description = description.strip()
+        clean_problem = problem_text.strip()
 
-        if not clean_title or not clean_description:
-            st.error("Please enter both a problem title and description.")
+        if not clean_problem:
+            st.error("Please describe the client problem first.")
             return
 
-        success, result = create_trello_card(clean_title, clean_description, priority)
+        analyzed = analyze_client_problem(clean_problem)
+        success, result = create_trello_card(analyzed["title"], analyzed["description"], analyzed["priority"])
         ticket = {
-            "title": clean_title,
-            "priority": priority,
+            "title": analyzed["title"],
+            "category": analyzed["category"],
+            "priority": analyzed["priority"],
             "status": "Sent to Trello" if success else "Saved locally",
             "result": result,
         }
         st.session_state.support_tickets.insert(0, ticket)
 
+        st.info(
+            f"Bot created title: {analyzed['title']} | "
+            f"Category: {analyzed['category']} | Priority: {analyzed['priority']}"
+        )
         if success:
             st.success(f"Problem was added to Trello: {result}")
         else:

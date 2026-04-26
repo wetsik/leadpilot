@@ -21,7 +21,7 @@ The project is created for sales managers and CRM teams who need to quickly unde
 - highlight top opportunities;
 - display a detailed view for the selected lead;
 - show a Trello-style Data QA Board with CSV errors, warnings, and follow-up tasks;
-- let clients submit problems and send them to a Trello To Do list through the Trello API;
+- let clients describe problems in plain text, analyze the message, and send an automatically prepared task to a Trello To Do list through the Trello API;
 - support Bitrix24-style CRM fields, including `bitrix_owner`;
 - include a health-check server for deployment availability checks.
 
@@ -82,7 +82,21 @@ This feature helps users understand whether the CSV file is correct before makin
 
 ## Trello API Integration
 
-The project includes a client problem reporting form. A user can enter a problem title, description, and priority. When the form is submitted, the application creates a new card in a Trello To Do list.
+The project includes a client problem reporting form. A user writes a problem in plain text, and the application acts like a small support bot:
+
+- analyzes the problem message;
+- detects a category, such as CSV/Data Import, CRM/Leads, Dashboard/UI, API/Integration, or Performance;
+- assigns a priority;
+- creates a clear Trello card title;
+- writes a structured card description with the original client message and suggested next step;
+- sends the card to the Trello To Do list;
+- returns the created Trello card link in the interface.
+
+Example result:
+
+```text
+Problem was added to Trello: https://trello.com/c/exampleCard
+```
 
 Required Trello configuration:
 
